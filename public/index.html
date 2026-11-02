@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panou Mecanizare</title>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<script>
+// A plain script on purpose: it has to run on TV browsers too old for the rest of the page.
+(function () {
+  // 1rem = 16px at 1920x1080, so the layout looks the same on any TV.
+  var root = document.documentElement;
+  function fit() {
+    root.style.fontSize = Math.min(window.innerWidth / 120, window.innerHeight / 67.5) + 'px';
+  }
+  fit();
+  window.addEventListener('resize', fit);
+
+  // app.js sets the flag as it starts. If it never does, say why instead of leaving a black screen.
+  setTimeout(function () {
+    if (window.panouPornit) return;
+    var box = document.createElement('div');
+    box.className = 'browser-vechi';
+    box.innerHTML = '<h2>Panoul nu poate porni în acest browser</h2><p></p>';
+    box.querySelector('p').textContent = navigator.userAgent;
+    document.body.appendChild(box);
+  }, 15000);
+}());
+</script>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-move" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2 20.5 21 12 16.8 3.5 21Z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect fill="currentColor" x="5.5" y="4" width="4.6" height="16" rx="1"/><rect fill="currentColor" x="13.9" y="4" width="4.6" height="16" rx="1"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect fill="currentColor" x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-nosignal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M8.5 9a3.6 3.6 0 1 1 5.4 3.1c-1.2.7-1.9 1.4-1.9 2.9M12 19.6v.1"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 2.5 20.5h19ZM12 10v5M12 17.8v.1"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.4l3.4 2"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.6 4.6L19 7.5"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/></symbol>
+  <symbol id="i-road" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4.5 20.5 8.5 3.5M19.5 20.5l-4-17M12 4.5v3M12 10.5v3M12 16.5v3"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="2.5" width="7" height="4" rx="1"/><path d="M15.5 4.5h2.5a2 2 0 0 1 2 2V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h2.5"/><path d="m8.5 14 2.5 2.5 4.5-4.5"/></g></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></g></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m12 14 4.5-4.5M3.3 19a10 10 0 1 1 17.4 0"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 2.5H6a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5Z"/><path d="M14 2.5v6h6"/></g></symbol>
+</svg>
+
+<header class="topbar">
+  <div class="brand"><strong>UNITIP</strong><span>Mecanizare</span></div>
+  <nav class="tabs">
+    <div class="tab-btn" data-tab="tab-gps"><span>GPS flotă</span><i class="tab-progress"></i></div>
+    <div class="tab-btn" data-tab="tab-mec"><span>Atelier și documente</span><i class="tab-progress"></i></div>
+  </nav>
+  <div class="status" id="status"></div>
+  <div class="clock"><time id="clock-time"></time><span id="clock-date"></span></div>
+</header>
+
+<main>
+  <section class="tab" id="tab-gps">
+    <div class="map-wrap"><div id="map"></div></div>
+    <aside class="gps-side">
+      <div class="state-tiles" id="state-tiles"></div>
+      <section class="panel panel--speeds">
+        <header class="panel-head">
+          <svg class="ic" aria-hidden="true"><use href="#i-gauge"/></svg>
+          <h2>Top viteze</h2>
+          <span class="panel-note" id="speeds-week"></span>
+        </header>
+        <ol class="speeds" id="speeds"></ol>
+        <footer class="speeds-legend" id="speeds-legend"></footer>
+      </section>
+      <section class="panel panel--idle">
+        <header class="panel-head">
+          <svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>
+          <h2>Staționate cel mai mult</h2>
+        </header>
+        <ul class="idle" id="idle"></ul>
+      </section>
+    </aside>
+  </section>
+
+  <section class="tab" id="tab-mec">
+    <div class="mec">
+      <div class="kpis" id="kpis"></div>
+      <div class="mec-body">
+        <section class="panel panel--work">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-wrench"/></svg>
+            <h2>În lucru acum</h2>
+            <span class="pager" id="pager-work"></span>
+          </header>
+          <div class="panel-body" id="body-work"></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-clipboard"/></svg>
+            <h2>ITP</h2>
+            <span class="counts" id="counts-itp"></span>
+            <span class="pager" id="pager-itp"></span>
+          </header>
+          <div class="panel-body" id="body-itp"></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>
+            <h2>RCA</h2>
+            <span class="counts" id="counts-rca"></span>
+            <span class="pager" id="pager-rca"></span>
+          </header>
+          <div class="panel-body" id="body-rca"></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-calendar"/></svg>
+            <h2>Revizii</h2>
+            <span class="counts" id="counts-revizii"></span>
+            <span class="pager" id="pager-revizii"></span>
+          </header>
+          <div class="panel-body" id="body-revizii"></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-gauge"/></svg>
+            <h2>Tahograf</h2>
+            <span class="counts" id="counts-tahograf"></span>
+            <span class="pager" id="pager-tahograf"></span>
+          </header>
+          <div class="panel-body" id="body-tahograf"></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head">
+            <svg class="ic" aria-hidden="true"><use href="#i-road"/></svg>
+            <h2>Roviniete</h2>
+            <span class="counts" id="counts-rovinieta"></span>
+            <span class="pager" id="pager-rovinieta"></span>
+          </header>
+          <div class="panel-body" id="body-rovinieta"></div>
+        </section>
+      </div>
+      <div class="mec-warnings" id="mec-warnings" hidden></div>
+    </div>
+    <div class="mec-empty" id="mec-empty" hidden></div>
+  </section>
+</main>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+node_modules/
+.env
+.claude/
+.profil-edge/
+
+# The repository is public: real plates and dates must never end up in it.
+date/*
+!date/mecanizare.xlsx
+*.xlsx.tmp

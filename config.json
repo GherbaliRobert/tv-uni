@@ -1,0 +1,34 @@
+{
+  "port": 8080,
+  "gazda": "127.0.0.1",
+  "rotatieSecunde": 120,
+  "gps": {
+    "furnizor": "demo",
+    "actualizareSecunde": 15,
+    "vitezaMinimaMiscare": 5,
+    "faraSemnalMinutePornit": 15,
+    "faraSemnalOreOprit": 24,
+    "vitezaMaximaPlauzibila": 180,
+    "pragVitezaAtentie": 90,
+    "pragVitezaCritic": 110,
+    "topViteze": 10
+  },
+  "harta": {
+    "tile": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "atribuire": "&copy; OpenStreetMap",
+    "centru": [45.9, 25.0],
+    "zoom": 7,
+    "zoomMaxim": 14
+  },
+  "mecanizare": {
+    "fisier": "mecanizare.xlsx",
+    "fisierExpirari": "Centralizator_expirari_*.xlsx",
+    "verificareSecunde": 10,
+    "zileUrgent": 7,
+    "zileAtentie": 30,
+    "kmUrgent": 1000,
+    "kmAtentie": 5000,
+    "oreUrgent": 25,
+    "oreAtentie": 100
+  }
+}
