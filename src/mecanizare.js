@@ -409,7 +409,11 @@ function createMecanizareStore(cfg, dir) {
   const stateFile = path.join(dir, 'stare.json');
   let fleet = withoutExcluded(readJson(fleetFile, null), cfg.statusuriExcluse);
   const state = { overrides: {}, notApplicable: {}, tasks: [], ...readJson(stateFile, {}) };
-  const saveState = () => writeJson(stateFile, state);
+  const listeners = new Set();
+  const saveState = () => {
+    writeJson(stateFile, state);
+    listeners.forEach((listener) => listener());
+  };
 
   function requireVehicle(plate, doc) {
     const vehicle = vehiclesByPlate(fleet).get(plateKey(plate));
@@ -454,6 +458,11 @@ function createMecanizareStore(cfg, dir) {
     },
 
     menu: () => buildMenu(fleet, state, Date.now(), cfg),
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
 
     // Only the extracted vehicle data is saved; the workbook itself is dropped here.
     async importWorkbook(buffer) {

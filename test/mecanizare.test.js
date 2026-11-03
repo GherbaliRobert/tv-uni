@@ -332,6 +332,39 @@ test('"does not apply" takes a document off every list, and can be undone', asyn
   assert.equal(store.snapshot().view.totals.expired, 1);
 });
 
+test('every change tells the monitors, and only after it is saved', async () => {
+  const { dir, store } = tempStore();
+  const seen = [];
+  const unsubscribe = store.subscribe(() => {
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'stare.json'), 'utf8'));
+    seen.push(saved.tasks.length);
+  });
+
+  await store.importWorkbook(await upload(logistica([vehicle('B 1 AAA', 'FUNCTIONAL', { itp: soon(), rca: soon() })])));
+  assert.equal(seen.length, 1, 'an import');
+
+  store.addTask({ plate: 'B 1 AAA', title: 'Frâne' });
+  assert.deepEqual(seen.slice(1), [1], 'the file already holds the new task when the monitors hear about it');
+  const problem = store.menu().problems[0].id;
+  store.startTask(problem, {});
+  store.reopenTask(problem);
+  store.finishTask(problem, {});
+  store.takeDocument({ plate: 'B 1 AAA', doc: 'itp' });
+  store.finishTask(store.menu().inProgress[0].id, { date: future(365) });
+  store.resolveDocument({ plate: 'B 1 AAA', doc: 'rca', date: future(365) });
+  store.setNotApplicable({ plate: 'B 1 AAA', doc: 'rovinieta', value: true });
+  store.addTask({ title: 'De șters' });
+  store.deleteTask(store.menu().problems[0].id);
+  assert.equal(seen.length, 11, 'every action, once');
+
+  assert.throws(() => store.addTask({ title: '' }));
+  assert.equal(seen.length, 11, 'a refused change is not a change');
+
+  unsubscribe();
+  store.addTask({ title: 'După plecare' });
+  assert.equal(seen.length, 11);
+});
+
 test('everything survives a restart, and a broken file is set aside, not overwritten', async () => {
   const { dir, store } = tempStore();
   await store.importWorkbook(await upload(logistica([vehicle('B 1 AAA', 'FUNCTIONAL', { itp: soon() })])));

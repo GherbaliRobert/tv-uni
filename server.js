@@ -8,6 +8,7 @@ const config = require('./config.json');
 const { createGpsTracker } = require('./src/gps/tracker');
 const { createMecanizareStore, UserError } = require('./src/mecanizare');
 const { createAccess, passwordProblem } = require('./src/access');
+const { createLiveStream } = require('./src/live');
 
 // Local settings live in .env; on a host the variables are set there.
 try {
@@ -62,6 +63,7 @@ app.get('/api/config', (req, res) => {
 });
 if (gps) app.get('/api/gps', (req, res) => res.json(gps.snapshot()));
 app.get('/api/mecanizare', (req, res) => res.json(mecanizare.snapshot()));
+app.get('/api/mecanizare/evenimente', createLiveStream(mecanizare.subscribe));
 
 // Every change answers with the whole menu, so the page never shows a stale list.
 function menuAction(run) {

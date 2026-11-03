@@ -74,6 +74,10 @@ Reviziile nu sunt în Logistica Auto. Se trec din fila **Acte**, pe coloana Revi
 
 Totul se salvează în `stare.json`, lângă `flota.json`, pe volumul serverului.
 
+### Actualizare în timp real
+
+Monitorul ține o conexiune deschisă cu serverul (`/api/mecanizare/evenimente`) și se actualizează imediat ce se salvează ceva în meniu, fără reîncărcare. Dacă legătura se întrerupe, se reconectează singur și preia ce s-a schimbat între timp. Tot timpul, și dacă un browser sau o rețea nu permite o astfel de conexiune, monitorul citește datele și la 30 de secunde.
+
 ### GPS
 
 Pentru a-l porni, pune `gps.activ` pe `true`. Implicit rulează simulatorul `src/gps/demo.js`, iar pe ecran apare eticheta **DATE DEMO**. Pentru date reale:

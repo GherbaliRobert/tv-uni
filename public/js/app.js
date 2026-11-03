@@ -3,6 +3,8 @@ import { initMecanizare, renderMecanizare, startPaging, stopPaging } from './mec
 import { TZ, esc, icon, now, syncClock, fmtDuration, fmtShortDate, fmtTime } from './util.js';
 
 const MECANIZARE_REFRESH_MS = 30000;
+const LIVE_SETTLE_MS = 150;
+const LIVE_RETRY_MS = 10000;
 const STALE_GPS_INTERVALS = 4;
 
 window.panouPornit = true;
@@ -98,6 +100,24 @@ const refreshMecanizare = () => refresh('/api/mecanizare', (data) => {
   renderMecanizare(data);
 });
 
+// Changes arrive as soon as they are saved; the regular refresh stays as the safety net.
+function connectLive() {
+  if (!window.EventSource) return;
+  const source = new EventSource('/api/mecanizare/evenimente');
+  let pending;
+  // A burst of saves waits to settle, so an older answer can't land last.
+  const refreshSoon = () => {
+    clearTimeout(pending);
+    pending = setTimeout(refreshMecanizare, LIVE_SETTLE_MS);
+  };
+  source.onmessage = refreshSoon;
+  source.onopen = refreshSoon; // Picks up whatever was saved while disconnected.
+  source.onerror = () => {
+    // The browser retries a dropped connection by itself, but gives up on an error page, as during a deploy.
+    if (source.readyState === EventSource.CLOSED) setTimeout(connectLive, LIVE_RETRY_MS);
+  };
+}
+
 function renderStatus() {
   const chips = [];
   const { gps, mecanizare } = state;
@@ -171,6 +191,7 @@ async function main() {
 
   await refreshMecanizare();
   setInterval(refreshMecanizare, MECANIZARE_REFRESH_MS);
+  connectLive();
   if (config.gps) {
     await refreshGps();
     setInterval(refreshGps, state.gpsIntervalMs);
