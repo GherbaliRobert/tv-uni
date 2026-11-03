@@ -108,6 +108,15 @@ function readDetails(workbook) {
   return details;
 }
 
+const isExcluded = (status, excludedStatuses) => excludedStatuses.some((prefix) => normalize(status).startsWith(prefix));
+
+// The list can change after an import, and it must hold without importing again.
+function withoutExcluded(fleet, excludedStatuses) {
+  if (!fleet) return fleet;
+  const vehicles = fleet.vehicles.filter((vehicle) => !isExcluded(vehicle.status, excludedStatuses));
+  return { ...fleet, vehicles, excluded: fleet.excluded + fleet.vehicles.length - vehicles.length };
+}
+
 // The STATUS columns of the file are not used: their formula says EXPIRAT for an empty date too.
 function parseLogistica(workbook, excludedStatuses) {
   const sheet = findSheet(workbook, 'valabilitate acte');
@@ -133,7 +142,7 @@ function parseLogistica(workbook, excludedStatuses) {
     const detail = details.get(key) ?? {};
     const where = `Rândul ${rowNumber} (${plate})`;
     const status = read('status') ?? detail.status ?? null;
-    if (status && excludedStatuses.some((prefix) => normalize(status).startsWith(prefix))) {
+    if (isExcluded(status, excludedStatuses)) {
       excluded += 1;
       return;
     }
@@ -269,9 +278,11 @@ function vehiclesByPlate(fleet) {
   return new Map((fleet?.vehicles ?? []).map((vehicle) => [plateKey(vehicle.plate), vehicle]));
 }
 
+// A document of a vehicle no longer on the list has nothing left to do; a problem typed by hand may have no vehicle at all.
 function tasksInStage(state, stage, vehicles, now) {
   return state.tasks
     .filter((task) => task.stage === stage)
+    .filter((task) => !task.doc || vehicles.has(plateKey(task.plate)))
     .map((task) => presentTask(task, vehicles, now))
     .sort(compareTasks);
 }
@@ -396,7 +407,7 @@ function writeJson(file, data) {
 function createMecanizareStore(cfg, dir) {
   const fleetFile = path.join(dir, 'flota.json');
   const stateFile = path.join(dir, 'stare.json');
-  let fleet = readJson(fleetFile, null);
+  let fleet = withoutExcluded(readJson(fleetFile, null), cfg.statusuriExcluse);
   const state = { overrides: {}, notApplicable: {}, tasks: [], ...readJson(stateFile, {}) };
   const saveState = () => writeJson(stateFile, state);
 

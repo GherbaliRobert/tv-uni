@@ -246,7 +246,7 @@ function renderImport(result = state.importResult, error = state.importError) {
   const last = importedAt
     ? `<div class="card">
         <strong>Ultimul import: ${esc(fmtDate(importedAt))}</strong>
-        ${esc(count(acte.length, 'mașină', 'mașini'))} pe panou, ${esc(count(excluded, 'radiată exclusă', 'radiate excluse'))}.
+        ${esc(count(acte.length, 'mașină', 'mașini'))} pe panou, ${esc(count(excluded, 'exclusă', 'excluse'))} (radiate sau vândute).
         ${list(warnings)}
       </div>`
     : '';
@@ -261,7 +261,7 @@ function renderImport(result = state.importResult, error = state.importError) {
         <button class="btn btn--primary" id="import-send">Importă</button>
       </form>
       ${error ? `<div class="notice notice--bad" style="margin:0">${esc(error)}</div>` : ''}
-      ${result ? `<div class="notice notice--good" style="margin:0">Import reușit: ${esc(count(result.vehicles, 'mașină', 'mașini'))}, ${esc(count(result.excluded, 'radiată exclusă', 'radiate excluse'))}.</div>` : ''}
+      ${result ? `<div class="notice notice--good" style="margin:0">Import reușit: ${esc(count(result.vehicles, 'mașină', 'mașini'))}, ${esc(count(result.excluded, 'exclusă', 'excluse'))} (radiate sau vândute).</div>` : ''}
       ${last}
     </section>`;
 }

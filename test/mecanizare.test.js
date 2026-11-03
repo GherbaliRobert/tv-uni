@@ -6,10 +6,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ExcelJS = require('exceljs');
+const config = require('../config.json');
 const { UserError, parseLogistica, buildView, createMecanizareStore } = require('../src/mecanizare');
 
-const CFG = { zileUrgent: 7, zileAtentie: 30, statusuriExcluse: ['radiat'] };
-const EXCLUDED = CFG.statusuriExcluse;
+const EXCLUDED = config.mecanizare.statusuriExcluse;
+const CFG = { zileUrgent: 7, zileAtentie: 30, statusuriExcluse: EXCLUDED };
 const NOV_3 = new Date(2026, 10, 3).getTime();
 const excelDate = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
 const formula = (result) => ({ formula: 'IF(J2<=TODAY(),"EXPIRAT","VALABIL")', result });
@@ -53,16 +54,41 @@ const soon = () => {
 };
 const future = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 
-test('parseLogistica drops radiated vehicles and keeps every other status', () => {
+test('parseLogistica drops radiated and sold vehicles and keeps every other status', () => {
   const { vehicles, excluded } = parseLogistica(logistica([
     vehicle('B 1 AAA', 'FUNCTIONAL'),
     vehicle('B 2 AAA', 'DEFECT'),
     vehicle('B 3 AAA', 'RADIATA'),
     vehicle('B 4 AAA', 'radiat'),
     vehicle('B 5 AAA', 'VANDUT'),
+    vehicle('B 6 AAA', 'Vândută'),
   ]), EXCLUDED);
-  assert.deepEqual(vehicles.map((v) => v.plate), ['B 1 AAA', 'B 2 AAA', 'B 5 AAA']);
-  assert.equal(excluded, 2);
+  assert.deepEqual(vehicles.map((v) => v.plate), ['B 1 AAA', 'B 2 AAA']);
+  assert.equal(excluded, 4);
+});
+
+test('a status excluded after the import also leaves the lists, without importing again', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panou-test-'));
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const before = createMecanizareStore({ ...CFG, statusuriExcluse: ['radiat'] }, dir);
+  await before.importWorkbook(await upload(logistica([
+    vehicle('B 1 AAA', 'FUNCTIONAL', { itp: soon() }),
+    vehicle('B 2 AAA', 'VANDUT', { itp: soon() }),
+    vehicle('B 3 AAA', 'RADIATA', { itp: soon() }),
+  ])));
+  before.takeDocument({ plate: 'B 2 AAA', doc: 'itp' });
+  before.addTask({ plate: 'B 2 AAA', title: 'Predare acte' });
+  assert.equal(before.menu().acte.length, 2);
+  assert.equal(before.menu().inProgress.length, 1);
+
+  const after = createMecanizareStore({ ...CFG, statusuriExcluse: ['radiat', 'vandut'] }, dir);
+  const menu = after.menu();
+  assert.deepEqual(menu.acte.map((v) => v.plate), ['B 1 AAA']);
+  assert.equal(menu.excluded, 2);
+  assert.equal(menu.documents.length, 1);
+  assert.equal(menu.inProgress.length, 0, 'its documents leave the monitor too');
+  assert.equal(menu.problems.length, 1, 'a problem typed by hand stays until someone closes it');
+  assert.equal(after.snapshot().view.totals.soon, 1);
 });
 
 test('parseLogistica goes by the dates, because the status columns lie about empty ones', () => {

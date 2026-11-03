@@ -26,7 +26,8 @@
   },
   "mecanizare": {
     "statusuriExcluse": [
-      "radiat"
+      "radiat",
+      "vandut"
     ],
     "zileUrgent": 7,
     "zileAtentie": 30

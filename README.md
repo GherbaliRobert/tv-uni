@@ -54,7 +54,7 @@ Apoi dublu-click pe `Porneste-Server.bat` și deschide http://localhost:8080. `P
 
 Doar foile **VALABILITATE ACTE** și **EVIDENTA AUTO**, și doar numărul, inventarul, tipul, marca, modelul, statusul, șantierul, datele de expirare și linkul de dosar. Foile șoferilor, cu CNP-uri și salarii, nu se citesc, iar fișierul în sine nu se păstrează pe server: rămân doar datele extrase, în `flota.json`.
 
-- Mașinile cu status care începe cu `radiat` nu apar nicăieri. Lista e la `mecanizare.statusuriExcluse` în `config.json`.
+- Mașinile radiate sau vândute nu apar nicăieri. Lista e la `mecanizare.statusuriExcluse` în `config.json`, iar o schimbare se aplică la repornire, fără un nou import.
 - Coloanele `STATUS` ale actelor nu se folosesc, pentru că formula lor scrie `EXPIRAT` și când data lipsește. O dată goală înseamnă că actul nu apare pe monitor. Se vede în fila **Acte**, cu `—`.
 - Dacă un fișier nu poate fi citit, e refuzat și datele bune rămân.
 
