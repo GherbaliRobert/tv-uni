@@ -6,8 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test",
-    "excel-demo": "node scripts/creeaza-excel-demo.js"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"

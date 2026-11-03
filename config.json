@@ -3,6 +3,7 @@
   "gazda": "127.0.0.1",
   "rotatieSecunde": 120,
   "gps": {
+    "activ": false,
     "furnizor": "demo",
     "actualizareSecunde": 15,
     "vitezaMinimaMiscare": 5,
@@ -16,19 +17,18 @@
   "harta": {
     "tile": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     "atribuire": "&copy; OpenStreetMap",
-    "centru": [45.9, 25.0],
+    "centru": [
+      45.9,
+      25
+    ],
     "zoom": 7,
     "zoomMaxim": 14
   },
   "mecanizare": {
-    "fisier": "mecanizare.xlsx",
-    "fisierExpirari": "Centralizator_expirari_*.xlsx",
-    "verificareSecunde": 10,
+    "statusuriExcluse": [
+      "radiat"
+    ],
     "zileUrgent": 7,
-    "zileAtentie": 30,
-    "kmUrgent": 1000,
-    "kmAtentie": 5000,
-    "oreUrgent": 25,
-    "oreAtentie": 100
+    "zileAtentie": 30
   }
 }

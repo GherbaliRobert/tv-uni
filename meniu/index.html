@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Meniu Mecanizare</title>
+<link rel="stylesheet" href="/meniu/meniu.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand"><strong>UNITIP</strong> <span>Mecanizare</span></div>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <div class="bar-end">
+    <a class="link" href="/" target="_blank" rel="noopener">Monitor</a>
+    <form method="post" action="/iesi"><button class="link">Ieși</button></form>
+  </div>
+</header>
+
+<div class="notice notice--bad" id="notice" role="alert" hidden></div>
+
+<main id="view"></main>
+
+<dialog id="dialog">
+  <form id="dialog-form" method="dialog">
+    <h2 id="dialog-title"></h2>
+    <p class="dialog-note" id="dialog-note"></p>
+    <div id="dialog-fields"></div>
+    <p class="dialog-error" id="dialog-error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn" id="dialog-cancel">Renunță</button>
+      <button type="submit" class="btn btn--primary" id="dialog-ok">Salvează</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="/meniu/meniu.js"></script>
+</body>
+</html>

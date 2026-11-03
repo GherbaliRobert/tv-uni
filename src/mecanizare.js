@@ -1,56 +1,46 @@
-const fs = require('fs/promises');
+const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const { daysBetween, parseDate } = require('./dates');
 
-// Headers are matched without diacritics or punctuation, so columns can be reordered.
-// The first name of each list is the one reported when the column is missing.
-const FLEET_COLUMNS = {
-  plate: ['nr inmatriculare', 'numar inmatriculare', 'masina'],
-  type: ['tip', 'tip masina', 'tip utilaj'],
-  model: ['marca model', 'marca', 'model'],
-  rovinieta: ['rovinieta expira', 'rovinieta'],
-  itp: ['itp expira', 'itp'],
-  rca: ['rca expira', 'rca'],
-  reviewDate: ['revizie scadenta data', 'revizie data'],
-  reviewCounter: ['revizie scadenta contor', 'revizie contor'],
-  counter: ['contor actual'],
-  unit: ['unitate contor', 'unitate'],
+const DOCS = {
+  itp: 'ITP',
+  rca: 'RCA',
+  rovinieta: 'Rovinietă',
+  tahograf: 'Tahograf',
+  licenta: 'Licență',
+  revizie: 'Revizie',
 };
 
-const WORK_COLUMNS = {
-  plate: ['nr inmatriculare', 'numar inmatriculare', 'masina'],
-  job: ['lucrare', 'lucrare efectuata', 'descriere'],
-  mechanic: ['mecanic', 'responsabil', 'mecanic responsabil'],
-  location: ['loc', 'locatie'],
-  since: ['intrare', 'data intrare'],
-  due: ['termen estimat', 'termen'],
-  status: ['stare', 'status'],
-  priority: ['prioritate'],
+// Headers are matched without diacritics or punctuation. Only these columns are ever read:
+// the same file holds personal data of the drivers, which must never reach the server's disk.
+const COLUMNS = {
+  plate: ['nr auto'],
+  inventory: ['nr inventar'],
+  type: ['tip'],
+  make: ['marca'],
+  model: ['model'],
+  status: ['status'],
+  itp: ['data expirare itp'],
+  rca: ['data expirare rca'],
+  rovinieta: ['data expirare rovinieta'],
+  tahograf: ['tahograf', 'data expirare tahograf'],
+  licenta: ['licenta', 'data expirare licenta'],
+  revizie: ['revizie', 'data expirare revizie'],
+  link: ['link documente'],
 };
-
-// The monthly centralizer: titles and columns of its blocks.
-const EXPIRY_SECTIONS = {
-  itp: 'itp',
-  rca: 'rca',
-  tahograf: 'tahograf',
-  tahografe: 'tahograf',
-  rovinieta: 'rovinieta',
-  roviniete: 'rovinieta',
-  revizie: 'revizii',
-  revizii: 'revizii',
-};
-
-const EXPIRY_COLUMNS = {
-  plate: ['numar auto', 'nr auto', 'nr inmatriculare', 'numar inmatriculare', 'masina'],
-  date: ['data expirarii', 'data expirare', 'expira'],
-  done: ['realizat'],
-};
-
-const DONE_MARKS = new Set(['✅', '☑', '✔', '✓', '☒', '❎', 'x', 'da', 'realizat', 'facut', 'gata', 'true']);
-const NOT_DONE_MARKS = new Set(['🔲', '☐', '⬜', '□', '▢', 'nu', 'false']);
+const REQUIRED_COLUMNS = ['plate', 'status', 'itp', 'rca'];
+const DETAIL_COLUMNS = { plate: ['nr auto'], status: ['status'], location: ['locatie santier'] };
 
 const LEVEL_RANK = { expired: 0, urgent: 1, soon: 2 };
+const HISTORY_LIMIT = 300;
+const WORKING_STATUS = 'functional';
+const EARLIEST_YEAR = 2000;
+const MAX_TEXT = 200;
+
+// A refusal the person at the laptop can act on; anything else is a bug and stays in the log.
+class UserError extends Error {}
 
 function normalize(text) {
   return String(text ?? '')
@@ -62,6 +52,7 @@ function normalize(text) {
 }
 
 const plateKey = (plate) => String(plate).toUpperCase().replace(/[^A-Z0-9]/g, '');
+const docKey = (plate, doc) => `${plateKey(plate)}:${doc}`;
 
 function cellValue(value) {
   if (value === null || value === undefined) return null;
@@ -76,193 +67,110 @@ function cellValue(value) {
   return value;
 }
 
-function parseCounter(value) {
-  if (typeof value === 'number') return value;
-  const number = Number(String(value).replace(/[\s.]/g, '').replace(',', '.'));
-  return Number.isFinite(number) ? number : null;
+function toIsoDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function readSheet(sheet, columns, warnings) {
-  const positions = {};
-  sheet.getRow(1).eachCell((cell, col) => {
-    const header = normalize(cellValue(cell.value));
-    for (const [key, names] of Object.entries(columns)) {
-      if (names.includes(header)) positions[key] = col;
-    }
-  });
-  for (const [key, names] of Object.entries(columns)) {
-    if (!positions[key]) warnings.push(`Foaia „${sheet.name}”: lipsește coloana „${names[0]}”`);
-  }
-  if (!positions.plate) return [];
-
-  const rows = [];
-  sheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const record = { rowNumber };
-    let hasData = false;
-    for (const [key, col] of Object.entries(positions)) {
-      record[key] = cellValue(row.getCell(col).value);
-      if (record[key] !== null) hasData = true;
-    }
-    if (!hasData) return;
-    if (record.plate === null) {
-      warnings.push(`Foaia „${sheet.name}”, rândul ${rowNumber}: lipsește numărul de înmatriculare`);
-      return;
-    }
-    record.plate = String(record.plate).toUpperCase();
-    rows.push(record);
-  });
-  return rows;
-}
-
-function dateField(record, key, sheetName, warnings) {
-  const value = record[key];
-  if (value === null || value === undefined) return null;
-  const date = parseDate(value);
-  if (!date) {
-    warnings.push(`Foaia „${sheetName}”, rândul ${record.rowNumber}: dată necitibilă „${value}” (${record.plate})`);
-  }
-  return date;
-}
-
-function counterField(record, key, warnings) {
-  const value = record[key];
-  if (value === null || value === undefined) return null;
-  const number = parseCounter(value);
-  if (number === null) {
-    warnings.push(`Foaia „Flota”, rândul ${record.rowNumber}: număr necitibil „${value}” (${record.plate})`);
-  }
-  return number;
+function fromIsoDate(text) {
+  const [year, month, day] = text.split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function findSheet(workbook, name) {
   return workbook.worksheets.find((sheet) => normalize(sheet.name) === name);
 }
 
-// Turns a loaded workbook into plain records, collecting anything unreadable as a warning.
-function parseWorkbook(workbook) {
-  const warnings = [];
-  const fleetSheet = findSheet(workbook, 'flota');
-  const workSheet = findSheet(workbook, 'in lucru');
-  if (!fleetSheet) throw new Error('Lipsește foaia „Flota”');
-  if (!workSheet) throw new Error('Lipsește foaia „In lucru”');
-
-  const fleet = readSheet(fleetSheet, FLEET_COLUMNS, warnings).map((r) => ({
-    plate: r.plate,
-    type: r.type,
-    model: r.model,
-    rovinieta: dateField(r, 'rovinieta', 'Flota', warnings),
-    itp: dateField(r, 'itp', 'Flota', warnings),
-    rca: dateField(r, 'rca', 'Flota', warnings),
-    reviewDate: dateField(r, 'reviewDate', 'Flota', warnings),
-    reviewCounter: counterField(r, 'reviewCounter', warnings),
-    counter: counterField(r, 'counter', warnings),
-    unit: normalize(r.unit).startsWith('or') ? 'ore' : 'km',
-  }));
-
-  const work = readSheet(workSheet, WORK_COLUMNS, warnings).map((r) => ({
-    plate: r.plate,
-    job: r.job,
-    mechanic: r.mechanic,
-    location: r.location,
-    status: r.status,
-    urgent: normalize(r.priority) === 'urgent',
-    since: dateField(r, 'since', 'In lucru', warnings),
-    due: dateField(r, 'due', 'In lucru', warnings),
-  }));
-
-  const info = findSheet(workbook, 'citeste ma');
-  let demo = false;
-  info?.eachRow((row) => {
-    if (normalize(cellValue(row.getCell(1).value)) === 'date demonstrative') {
-      demo = normalize(cellValue(row.getCell(2).value)) === 'da';
-    }
-  });
-
-  return { fleet, work, demo, warnings, hasWorkshop: true };
-}
-
-function headerColumns(row) {
+function headerColumns(row, columns) {
   const found = {};
   row.eachCell((cell, col) => {
     const header = normalize(cellValue(cell.value));
-    for (const [key, names] of Object.entries(EXPIRY_COLUMNS)) {
+    for (const [key, names] of Object.entries(columns)) {
       if (names.includes(header)) found[key] = col;
     }
   });
   return found;
 }
 
-// An unknown mark stays on the list: hiding a document that isn't done is the worse mistake.
-function isDone(value, where, warnings) {
-  if (value === null) return false;
-  const mark = String(value).replace(/️/g, '').trim().toLowerCase();
-  if (DONE_MARKS.has(mark)) return true;
-  if (!NOT_DONE_MARKS.has(mark)) warnings.push(`${where}: nu înțeleg „${value}” la Realizat`);
-  return false;
+// EVIDENTA AUTO adds the site, and the status when VALABILITATE ACTE has a broken formula for it.
+function readDetails(workbook) {
+  const details = new Map();
+  const sheet = findSheet(workbook, 'evidenta auto');
+  if (!sheet) return details;
+  const columns = headerColumns(sheet.getRow(1), DETAIL_COLUMNS);
+  if (!columns.plate) return details;
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const read = (key) => (columns[key] ? cellValue(row.getCell(columns[key]).value) : null);
+    const plate = read('plate');
+    if (plate !== null) details.set(plateKey(plate), { status: read('status'), location: read('location') });
+  });
+  return details;
 }
 
-// One block per document: a title row, a header row, then its rows. Later blocks may leave
-// a header cell out (the file does for Realizat), so columns carry over between blocks.
-function parseExpiries(workbook) {
-  const warnings = [];
-  const lists = {};
-  for (const sheet of workbook.worksheets) {
-    const columns = {};
-    let section = null;
-    let titleRow = 0;
-    sheet.eachRow((row, rowNumber) => {
-      const first = cellValue(row.getCell(1).value);
-      const known = EXPIRY_SECTIONS[normalize(first)];
-      if (known) {
-        section = known;
-        titleRow = rowNumber;
-        lists[section] = lists[section] ?? [];
-        return;
-      }
-      const header = headerColumns(row);
-      if (header.plate) {
-        Object.assign(columns, header);
-        // A header with no known title right above it starts a block the panel can't place.
-        if (titleRow !== rowNumber - 1) section = null;
-        return;
-      }
-      if (first !== null && first === cellValue(row.getCell(2).value)) {
-        if (titleRow) warnings.push(`Foaia „${sheet.name}”, rândul ${rowNumber}: blocul „${first}” nu are loc pe panou`);
-        section = null;
-        return;
-      }
-      if (!section || !columns.plate) return;
-      const plate = cellValue(row.getCell(columns.plate).value);
-      if (plate === null) return;
-
-      const where = `Foaia „${sheet.name}”, rândul ${rowNumber}`;
-      const rawDate = columns.date ? cellValue(row.getCell(columns.date).value) : null;
-      const date = rawDate === null ? null : parseDate(rawDate);
-      if (!date) {
-        warnings.push(`${where}: dată lipsă sau necitibilă (${plate})`);
-        return;
-      }
-      const mark = columns.done ? cellValue(row.getCell(columns.done).value) : null;
-      lists[section].push({ plate: String(plate).toUpperCase(), date, done: isDone(mark, where, warnings) });
-    });
+// The STATUS columns of the file are not used: their formula says EXPIRAT for an empty date too.
+function parseLogistica(workbook, excludedStatuses) {
+  const sheet = findSheet(workbook, 'valabilitate acte');
+  if (!sheet) throw new UserError('Fișierul nu conține foaia VALABILITATE ACTE');
+  const columns = headerColumns(sheet.getRow(1), COLUMNS);
+  const missing = REQUIRED_COLUMNS.filter((key) => !columns[key]);
+  if (missing.length) {
+    throw new UserError(`Foaia VALABILITATE ACTE nu are coloanele: ${missing.map((key) => COLUMNS[key][0].toUpperCase()).join(', ')}`);
   }
-  if (!Object.keys(lists).length) throw new Error('Fișierul nu conține blocurile ITP, RCA, TAHOGRAF sau ROVINIETĂ');
-  return { lists, warnings };
-}
 
-// Demo rows must never sit next to real ones, so real expiries switch the demo workshop file off.
-function mergeSources(workshop, expiries) {
-  if (!workshop && !expiries) return null;
-  const useWorkshop = Boolean(workshop && !(workshop.demo && expiries));
-  return {
-    fleet: useWorkshop ? workshop.fleet : [],
-    work: useWorkshop ? workshop.work : [],
-    demo: useWorkshop && workshop.demo,
-    warnings: [...(expiries?.warnings ?? []), ...(useWorkshop ? workshop.warnings : [])],
-    expiries,
-    hasWorkshop: useWorkshop,
-  };
+  const details = readDetails(workbook);
+  const warnings = [];
+  const vehicles = new Map();
+  let excluded = 0;
+
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const read = (key) => (columns[key] ? cellValue(row.getCell(columns[key]).value) : null);
+    const plate = read('plate');
+    if (plate === null) return;
+
+    const key = plateKey(plate);
+    const detail = details.get(key) ?? {};
+    const where = `Rândul ${rowNumber} (${plate})`;
+    const status = read('status') ?? detail.status ?? null;
+    if (status && excludedStatuses.some((prefix) => normalize(status).startsWith(prefix))) {
+      excluded += 1;
+      return;
+    }
+    if (vehicles.has(key)) {
+      warnings.push(`${where}: numărul apare de două ori, l-am păstrat pe primul`);
+      return;
+    }
+    if (!status) warnings.push(`${where}: fără status`);
+
+    const docs = {};
+    for (const doc of Object.keys(DOCS)) {
+      const raw = read(doc);
+      if (raw === null) continue;
+      const date = parseDate(raw);
+      if (date && date.getFullYear() >= EARLIEST_YEAR) docs[doc] = toIsoDate(date);
+      else warnings.push(`${where}: dată necitibilă la ${DOCS[doc]}`);
+    }
+
+    // Only links to real web pages: this one is opened with a click at the laptop.
+    const linkCell = columns.link ? row.getCell(columns.link).value : null;
+    const link = typeof linkCell?.hyperlink === 'string' && linkCell.hyperlink.startsWith('https://') ? linkCell.hyperlink : null;
+
+    vehicles.set(key, {
+      plate: String(plate).toUpperCase(),
+      inventory: read('inventory'),
+      type: read('type'),
+      make: read('make'),
+      model: read('model'),
+      status,
+      location: detail.location ?? null,
+      link,
+      docs,
+    });
+  });
+
+  if (!vehicles.size) throw new UserError('Foaia VALABILITATE ACTE nu conține nicio mașină');
+  return { vehicles: [...vehicles.values()], excluded, warnings };
 }
 
 function levelFromDays(days, cfg) {
@@ -272,261 +180,380 @@ function levelFromDays(days, cfg) {
   return null;
 }
 
-function levelFromCounter(left, unit, cfg) {
-  const [urgent, soon] = unit === 'ore' ? [cfg.oreUrgent, cfg.oreAtentie] : [cfg.kmUrgent, cfg.kmAtentie];
-  if (left <= 0) return 'expired';
-  if (left <= urgent) return 'urgent';
-  if (left <= soon) return 'soon';
-  return null;
+const vehicleLabel = (vehicle) => [vehicle?.make, vehicle?.model].filter(Boolean).join(' ') || null;
+const isWorking = (vehicle) => normalize(vehicle.status) === WORKING_STATUS;
+
+// A renewal entered at the laptop is newer than the Excel until the Excel catches up: the newest date wins.
+function documentState(vehicle, doc, state) {
+  const key = docKey(vehicle.plate, doc);
+  const fromExcel = vehicle.docs[doc] ?? null;
+  const fromMenu = state.overrides[key]?.date ?? null;
+  const useMenu = Boolean(fromMenu && (!fromExcel || fromMenu > fromExcel));
+  return {
+    date: useMenu ? fromMenu : fromExcel,
+    source: useMenu ? 'meniu' : 'excel',
+    notApplicable: Boolean(state.notApplicable[key]),
+  };
 }
 
-function moreUrgent(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return LEVEL_RANK[a] <= LEVEL_RANK[b] ? a : b;
+function openDocumentTask(state, plate, doc) {
+  return state.tasks.find((task) => task.doc === doc && task.stage === 'in-curs' && plateKey(task.plate) === plateKey(plate));
 }
 
-function emptyCounts() {
-  return { expired: 0, urgent: 0, soon: 0 };
+function dueDocuments(fleet, state, now, cfg) {
+  const today = new Date(now);
+  const items = [];
+  for (const vehicle of fleet.vehicles) {
+    for (const [doc, name] of Object.entries(DOCS)) {
+      const { date, notApplicable } = documentState(vehicle, doc, state);
+      if (!date || notApplicable) continue;
+      const days = daysBetween(today, fromIsoDate(date));
+      const level = levelFromDays(days, cfg);
+      if (!level) continue;
+      items.push({
+        plate: vehicle.plate,
+        label: vehicleLabel(vehicle),
+        status: vehicle.status,
+        working: isWorking(vehicle),
+        location: vehicle.location,
+        doc,
+        docName: name,
+        date: fromIsoDate(date).getTime(),
+        days,
+        level,
+        inProgress: Boolean(openDocumentTask(state, vehicle.plate, doc)),
+      });
+    }
+  }
+  // Vehicles that don't run go last: their expired papers are the least pressing.
+  return items.sort((a, b) => (b.working - a.working)
+    || LEVEL_RANK[a.level] - LEVEL_RANK[b.level]
+    || a.days - b.days);
+}
+
+function presentTask(task, vehicles, now) {
+  const vehicle = vehicles.get(plateKey(task.plate));
+  const due = task.due ? fromIsoDate(task.due) : null;
+  return {
+    id: task.id,
+    stage: task.stage,
+    plate: task.plate,
+    doc: task.doc ?? null,
+    label: vehicleLabel(vehicle),
+    location: vehicle?.location ?? null,
+    title: task.doc ? DOCS[task.doc] : task.title,
+    responsible: task.responsible ?? null,
+    urgent: Boolean(task.urgent),
+    due: due ? due.getTime() : null,
+    dueDays: due ? daysBetween(new Date(now), due) : null,
+    createdAt: task.createdAt,
+    startedAt: task.startedAt ?? null,
+    doneAt: task.doneAt ?? null,
+    result: task.result ?? null,
+  };
+}
+
+function compareTasks(a, b) {
+  return (b.urgent - a.urgent)
+    || (a.dueDays ?? Infinity) - (b.dueDays ?? Infinity)
+    || (a.startedAt ?? a.createdAt) - (b.startedAt ?? b.createdAt);
 }
 
 function countLevels(items) {
-  const counts = emptyCounts();
+  const counts = { expired: 0, urgent: 0, soon: 0 };
   for (const item of items) counts[item.level] += 1;
   return counts;
 }
 
-// Lists are computed on every request so the day counters roll over at midnight on their own.
-function buildView(data, now, cfg) {
-  const today = new Date(now);
-  const fleetByPlate = new Map(data.fleet.map((v) => [plateKey(v.plate), v]));
+function vehiclesByPlate(fleet) {
+  return new Map((fleet?.vehicles ?? []).map((vehicle) => [plateKey(vehicle.plate), vehicle]));
+}
 
-  const documentRows = (field) => (data.expiries
-    ? (data.expiries.lists[field] ?? []).filter((row) => !row.done)
-    : data.fleet.filter((v) => v[field]).map((v) => ({ plate: v.plate, date: v[field] })));
+function tasksInStage(state, stage, vehicles, now) {
+  return state.tasks
+    .filter((task) => task.stage === stage)
+    .map((task) => presentTask(task, vehicles, now))
+    .sort(compareTasks);
+}
 
-  const documents = (field) => documentRows(field)
-    .map(({ plate, date }) => {
-      const days = daysBetween(today, date);
-      const type = fleetByPlate.get(plateKey(plate))?.type ?? null;
-      return { plate, type, date: date.getTime(), days, level: levelFromDays(days, cfg) };
-    })
-    .filter((item) => item.level)
-    .sort((a, b) => a.days - b.days);
-
-  const fleetRevizii = data.fleet
-    .map((v) => {
-      const days = v.reviewDate ? daysBetween(today, v.reviewDate) : null;
-      const left = v.reviewCounter !== null && v.counter !== null ? v.reviewCounter - v.counter : null;
-      const byDate = days === null ? null : levelFromDays(days, cfg);
-      const byCounter = left === null ? null : levelFromCounter(left, v.unit, cfg);
-      const level = moreUrgent(byDate, byCounter);
-      if (!level) return null;
-      // Show whichever measure triggered the alert.
-      const useDate = byDate && (!byCounter || LEVEL_RANK[byDate] <= LEVEL_RANK[byCounter]);
-      return {
-        plate: v.plate,
-        type: v.type,
-        level,
-        date: v.reviewDate && useDate ? v.reviewDate.getTime() : null,
-        days: useDate ? days : null,
-        counterLeft: useDate ? null : left,
-        counterDue: useDate ? null : v.reviewCounter,
-        unit: v.unit,
-      };
-    })
-    .filter(Boolean);
-
-  const revizii = [...documents('revizii'), ...fleetRevizii]
-    .sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level] || (a.days ?? Infinity) - (b.days ?? Infinity));
-
-  const work = data.work
-    .map((w) => {
-      const vehicle = fleetByPlate.get(plateKey(w.plate));
-      return {
-        plate: w.plate,
-        type: vehicle?.type ?? null,
-        model: vehicle?.model ?? null,
-        job: w.job,
-        mechanic: w.mechanic,
-        location: w.location,
-        status: w.status,
-        urgent: w.urgent,
-        since: w.since ? w.since.getTime() : null,
-        due: w.due ? w.due.getTime() : null,
-        dueDays: w.due ? daysBetween(today, w.due) : null,
-      };
-    })
-    .sort((a, b) => (b.urgent - a.urgent)
-      || (a.dueDays ?? Infinity) - (b.dueDays ?? Infinity)
-      || (a.since ?? Infinity) - (b.since ?? Infinity));
-
+// What the TV shows. Licence, tachograph and service share a panel, so the rest stay large enough to read.
+function buildView(fleet, state, now, cfg) {
+  const items = dueDocuments(fleet, state, now, cfg);
+  const vehicles = vehiclesByPlate(fleet);
   const lists = {
-    rovinieta: documents('rovinieta'),
-    itp: documents('itp'),
-    rca: documents('rca'),
-    tahograf: documents('tahograf'),
-    revizii,
+    itp: items.filter((item) => item.doc === 'itp'),
+    rca: items.filter((item) => item.doc === 'rca'),
+    rovinieta: items.filter((item) => item.doc === 'rovinieta'),
+    alte: items.filter((item) => ['tahograf', 'licenta', 'revizie'].includes(item.doc)),
   };
-  const counts =Object.fromEntries(Object.entries(lists).map(([k, items]) => [k, countLevels(items)]));
-
-  const totals = emptyCounts();
-  for (const c of Object.values(counts)) {
-    totals.expired += c.expired;
-    totals.urgent += c.urgent;
-    totals.soon += c.soon;
-  }
-
-  const inWorkPlates = new Set(data.work.map((w) => plateKey(w.plate)));
-  const fleetTotal = data.fleet.length;
-  const unavailable = data.fleet.filter((v) => inWorkPlates.has(plateKey(v.plate))).length;
-
-  const pending = Object.values(lists).flat();
-  const inFile = (field) => (data.expiries ? field in data.expiries.lists : field !== 'tahograf');
+  const counts = Object.fromEntries(Object.entries(lists).map(([key, list]) => [key, countLevels(list)]));
+  const work = tasksInStage(state, 'in-curs', vehicles, now);
+  const problems = tasksInStage(state, 'de-rezolvat', vehicles, now);
 
   return {
-    work,
     lists,
     counts,
-    totals,
-    fleetTotal,
-    available: fleetTotal - unavailable,
-    overdueWork: work.filter((w) => w.dueDays !== null && w.dueDays < 0).length,
-    // Without a source, "nothing is due" would be a false reassurance.
-    known: {
-      work: data.hasWorkshop,
-      rovinieta: inFile('rovinieta'),
-      itp: inFile('itp'),
-      rca: inFile('rca'),
-      tahograf: inFile('tahograf'),
-      revizii: data.hasWorkshop || inFile('revizii'),
-    },
-    pendingCount: pending.length,
-    pendingPlates: new Set(pending.map((item) => plateKey(item.plate))).size,
-    doneCount: data.expiries ? Object.values(data.expiries.lists).flat().filter((row) => row.done).length : 0,
+    totals: countLevels(items),
+    work,
+    problems,
+    pendingDocuments: items.filter((item) => !item.inProgress).length,
+    overdueWork: work.filter((task) => task.dueDays !== null && task.dueDays < 0).length,
+    fleetTotal: fleet.vehicles.length,
+    working: fleet.vehicles.filter(isWorking).length,
   };
 }
 
-// A pattern with one * (Centralizator_*.xlsx) means the most recently saved match,
-// so next month's file takes over without touching the config.
-async function locateFile(pattern) {
-  const [prefix, suffix] = path.basename(pattern).split('*');
-  if (suffix === undefined) return pattern;
-  const dir = path.dirname(pattern);
-  const names = (await fs.readdir(dir)).filter((name) => name.startsWith(prefix) && name.endsWith(suffix));
-  if (!names.length) throw Object.assign(new Error('no match'), { code: 'ENOENT' });
-  const files = await Promise.all(names.map(async (name) => {
-    const file = path.join(dir, name);
-    return { file, mtimeMs: (await fs.stat(file)).mtimeMs };
-  }));
-  return files.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a)).file;
-}
+// Everything the laptop menu shows.
+function buildMenu(fleet, state, now, cfg) {
+  const today = new Date(now);
+  const vehicles = vehiclesByPlate(fleet);
+  const items = fleet ? dueDocuments(fleet, state, now, cfg) : [];
 
-// A half-saved or locked file keeps the last good version and is tried again at the next check.
-// Messages reach the TV and the network, so they name the file but not its path.
-function createWorkbookSource(pattern, parse) {
-  const name = path.basename(pattern);
-  let loaded = null;
-  const source = {
-    data: null,
-    updatedAt: null,
-    error: null,
-    missing: false,
-    async refresh() {
-      try {
-        const file = await locateFile(pattern);
-        const { mtimeMs } = await fs.stat(file);
-        source.missing = false;
-        source.error = null;
-        if (loaded === `${file}:${mtimeMs}`) return;
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.readFile(file);
-        source.data = parse(workbook);
-        source.updatedAt = mtimeMs;
-        loaded = `${file}:${mtimeMs}`;
-        console.log(`Excel încărcat: ${path.basename(file)}, ${source.data.warnings.length} avertismente`);
-        source.data.warnings.forEach((w) => console.warn(`  ${w}`));
-      } catch (err) {
-        source.missing = err.code === 'ENOENT';
-        source.error = source.missing ? `Nu găsesc fișierul ${name}` : `Fișierul ${name} nu poate fi citit`;
-        console.error(source.error, err.message);
-      }
-    },
-  };
-  return source;
-}
-
-class UploadError extends Error {}
-
-const EXPIRY_NAMES = { itp: 'ITP', rca: 'RCA', tahograf: 'Tahograf', rovinieta: 'Rovinietă', revizii: 'Revizii' };
-
-async function readUpload(buffer) {
-  const workbook = new ExcelJS.Workbook();
-  try {
-    await workbook.xlsx.load(buffer);
-  } catch {
-    throw new UploadError('Fișierul nu este un Excel .xlsx valid');
-  }
-  try {
-    return findSheet(workbook, 'flota')
-      ? { kind: 'atelier', parsed: parseWorkbook(workbook) }
-      : { kind: 'expirari', parsed: parseExpiries(workbook) };
-  } catch (err) {
-    throw new UploadError(err.message);
-  }
-}
-
-function describeUpload(kind, parsed) {
-  if (kind === 'atelier') return `Flotă ${parsed.fleet.length}, în lucru ${parsed.work.length}`;
-  return Object.entries(parsed.lists).map(([key, rows]) => `${EXPIRY_NAMES[key]} ${rows.length}`).join(', ');
-}
-
-function createMecanizareStore(cfg, root) {
-  const workshopFile = path.resolve(root, cfg.fisier);
-  const expiriesPattern = path.resolve(root, cfg.fisierExpirari);
-  const workshop = createWorkbookSource(workshopFile, parseWorkbook);
-  const expiries = createWorkbookSource(expiriesPattern, parseExpiries);
-  const sources = [expiries, workshop];
-  const refresh = () => Promise.all(sources.map((source) => source.refresh()));
-
-  // A bad file is refused before it can replace the good one. The name sent by the browser is never used.
-  async function saveUpload(buffer) {
-    const { kind, parsed } = await readUpload(buffer);
-    const target = kind === 'atelier' ? workshopFile : expiriesPattern.replace('*', 'incarcat');
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(`${target}.tmp`, buffer);
-    await fs.rename(`${target}.tmp`, target);
-    await refresh();
-    const notes = [...parsed.warnings];
-    if (parsed.demo) notes.unshift('Fișierul e marcat demonstrativ: scrie NU în celula B3 din foaia Citeste-ma.');
-    return { kind, summary: describeUpload(kind, parsed), notes };
-  }
-
-  function currentError() {
-    // The workshop file is optional once the centralizer supplies the expiries.
-    if (expiries.data && workshop.missing) return expiries.error;
-    return sources.map((source) => source.error).find(Boolean) ?? null;
-  }
-
-  function snapshot() {
-    const now = Date.now();
-    const data = mergeSources(workshop.data, expiries.data);
+  const acte = (fleet?.vehicles ?? []).map((vehicle) => {
+    const docs = {};
+    for (const doc of Object.keys(DOCS)) {
+      const { date, source, notApplicable } = documentState(vehicle, doc, state);
+      const days = date ? daysBetween(today, fromIsoDate(date)) : null;
+      docs[doc] = {
+        date: date ? fromIsoDate(date).getTime() : null,
+        iso: date,
+        source,
+        notApplicable,
+        days,
+        level: date && !notApplicable ? levelFromDays(days, cfg) : null,
+      };
+    }
     return {
-      now,
-      updatedAt: Math.max(...sources.map((source) => source.updatedAt ?? 0)) || null,
-      error: currentError(),
-      demo: Boolean(data?.demo),
-      warnings: data?.warnings ?? [],
-      view: data ? buildView(data, now, cfg) : null,
+      plate: vehicle.plate,
+      inventory: vehicle.inventory,
+      type: vehicle.type,
+      label: vehicleLabel(vehicle),
+      status: vehicle.status,
+      working: isWorking(vehicle),
+      location: vehicle.location,
+      link: vehicle.link,
+      docs,
     };
-  }
+  });
 
-  function start() {
-    refresh();
-    setInterval(refresh, cfg.verificareSecunde * 1000);
-  }
-
-  return { start, snapshot, saveUpload };
+  return {
+    now,
+    docs: DOCS,
+    importedAt: fleet?.importedAt ?? null,
+    excluded: fleet?.excluded ?? 0,
+    warnings: fleet?.warnings ?? [],
+    documents: items.filter((item) => !item.inProgress),
+    problems: tasksInStage(state, 'de-rezolvat', vehicles, now),
+    inProgress: tasksInStage(state, 'in-curs', vehicles, now),
+    history: state.tasks
+      .filter((task) => task.stage === 'rezolvat')
+      .map((task) => presentTask(task, vehicles, now))
+      .sort((a, b) => b.doneAt - a.doneAt)
+      .slice(0, HISTORY_LIMIT),
+    acte,
+  };
 }
 
-module.exports = { createMecanizareStore, UploadError, parseWorkbook, parseExpiries, mergeSources, buildView };
+function cleanText(value, what) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (text.length > MAX_TEXT) throw new UserError(`${what} e prea lung`);
+  return text || null;
+}
+
+function cleanDate(value, what) {
+  const text = cleanText(value, what);
+  if (!text) return null;
+  const date = parseDate(text);
+  if (!date) throw new UserError(`${what} nu e o dată validă`);
+  return toIsoDate(date);
+}
+
+function readJson(file, fallback) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fallback;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Never overwrite something unreadable: set it aside for a person to look at.
+    const aside = `${file}.stricat-${Date.now()}`;
+    fs.renameSync(file, aside);
+    console.error(`Fișier de date stricat, mutat la ${path.basename(aside)}`);
+    return fallback;
+  }
+}
+
+function writeJson(file, data) {
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(data));
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+function createMecanizareStore(cfg, dir) {
+  const fleetFile = path.join(dir, 'flota.json');
+  const stateFile = path.join(dir, 'stare.json');
+  let fleet = readJson(fleetFile, null);
+  const state = { overrides: {}, notApplicable: {}, tasks: [], ...readJson(stateFile, {}) };
+  const saveState = () => writeJson(stateFile, state);
+
+  function requireVehicle(plate, doc) {
+    const vehicle = vehiclesByPlate(fleet).get(plateKey(plate));
+    if (!vehicle) throw new UserError(`Mașina ${plate} nu e în listă`);
+    if (doc !== undefined && !DOCS[doc]) throw new UserError('Document necunoscut');
+    return vehicle;
+  }
+
+  function requireTask(id) {
+    const task = state.tasks.find((candidate) => candidate.id === id);
+    if (!task) throw new UserError('Lucrarea nu mai există. Reîncarcă pagina.');
+    return task;
+  }
+
+  function newTask(fields) {
+    const task = { id: crypto.randomUUID(), createdAt: Date.now(), ...fields };
+    state.tasks.push(task);
+    return task;
+  }
+
+  function closeTask(task, result) {
+    task.stage = 'rezolvat';
+    task.doneAt = Date.now();
+    task.result = result;
+  }
+
+  function applyDocumentDate(vehicle, doc, value) {
+    const date = cleanDate(value, 'Data');
+    if (!date) throw new UserError('Scrie data până la care e valabil');
+    const fromExcel = vehicle.docs[doc];
+    if (fromExcel && fromExcel >= date) {
+      throw new UserError(`În Excel e deja o dată la fel de nouă sau mai nouă: ${fromExcel.split('-').reverse().join('.')}`);
+    }
+    state.overrides[docKey(vehicle.plate, doc)] = { date, at: Date.now() };
+    return `Valabil până la ${date.split('-').reverse().join('.')}`;
+  }
+
+  return {
+    snapshot() {
+      const now = Date.now();
+      return { now, updatedAt: fleet?.importedAt ?? null, view: fleet ? buildView(fleet, state, now, cfg) : null };
+    },
+
+    menu: () => buildMenu(fleet, state, Date.now(), cfg),
+
+    // Only the extracted vehicle data is saved; the workbook itself is dropped here.
+    async importWorkbook(buffer) {
+      const workbook = new ExcelJS.Workbook();
+      try {
+        await workbook.xlsx.load(buffer);
+      } catch {
+        throw new UserError('Fișierul nu este un Excel .xlsx valid');
+      }
+      const parsed = parseLogistica(workbook, cfg.statusuriExcluse);
+      fleet = { importedAt: Date.now(), ...parsed };
+      writeJson(fleetFile, fleet);
+
+      // Once the Excel has caught up, the date entered at the laptop has done its job.
+      for (const [key, override] of Object.entries(state.overrides)) {
+        const [plate, doc] = key.split(':');
+        const fromExcel = vehiclesByPlate(fleet).get(plate)?.docs[doc];
+        if (fromExcel && fromExcel >= override.date) delete state.overrides[key];
+      }
+      saveState();
+      return { vehicles: parsed.vehicles.length, excluded: parsed.excluded, warnings: parsed.warnings };
+    },
+
+    addTask({ plate, title, responsible, due, urgent, stage }) {
+      const cleanTitle = cleanText(title, 'Descrierea');
+      if (!cleanTitle) throw new UserError('Scrie ce e de rezolvat');
+      const started = stage === 'in-curs';
+      newTask({
+        plate: (cleanText(plate, 'Numărul') ?? '').toUpperCase(),
+        title: cleanTitle,
+        responsible: cleanText(responsible, 'Responsabilul'),
+        due: cleanDate(due, 'Termenul'),
+        urgent: Boolean(urgent),
+        stage: started ? 'in-curs' : 'de-rezolvat',
+        startedAt: started ? Date.now() : null,
+      });
+      saveState();
+    },
+
+    takeDocument({ plate, doc, responsible, due }) {
+      const vehicle = requireVehicle(plate, doc);
+      if (openDocumentTask(state, plate, doc)) throw new UserError('E deja în curs');
+      newTask({
+        plate: vehicle.plate,
+        doc,
+        responsible: cleanText(responsible, 'Responsabilul'),
+        due: cleanDate(due, 'Termenul'),
+        stage: 'in-curs',
+        startedAt: Date.now(),
+      });
+      saveState();
+    },
+
+    startTask(id, { responsible, due }) {
+      const task = requireTask(id);
+      task.stage = 'in-curs';
+      task.startedAt = Date.now();
+      task.responsible = cleanText(responsible, 'Responsabilul') ?? task.responsible;
+      task.due = cleanDate(due, 'Termenul') ?? task.due;
+      saveState();
+    },
+
+    finishTask(id, { date, note }) {
+      const task = requireTask(id);
+      const result = task.doc
+        ? applyDocumentDate(requireVehicle(task.plate, task.doc), task.doc, date)
+        : cleanText(note, 'Nota');
+      closeTask(task, result);
+      saveState();
+    },
+
+    // A document goes back to being computed from its date; a problem stays on the list.
+    reopenTask(id) {
+      const task = requireTask(id);
+      if (task.doc) {
+        state.tasks.splice(state.tasks.indexOf(task), 1);
+      } else {
+        task.stage = 'de-rezolvat';
+        task.startedAt = null;
+      }
+      saveState();
+    },
+
+    deleteTask(id) {
+      const task = requireTask(id);
+      if (task.doc || task.stage === 'rezolvat') throw new UserError('Doar problemele deschise se pot șterge');
+      state.tasks.splice(state.tasks.indexOf(task), 1);
+      saveState();
+    },
+
+    resolveDocument({ plate, doc, date }) {
+      const vehicle = requireVehicle(plate, doc);
+      const result = applyDocumentDate(vehicle, doc, date);
+      closeTask(openDocumentTask(state, plate, doc) ?? newTask({ plate: vehicle.plate, doc }), result);
+      delete state.notApplicable[docKey(plate, doc)];
+      saveState();
+    },
+
+    setNotApplicable({ plate, doc, value }) {
+      requireVehicle(plate, doc);
+      const key = docKey(plate, doc);
+      if (value) {
+        state.notApplicable[key] = { at: Date.now() };
+        const open = openDocumentTask(state, plate, doc);
+        if (open) state.tasks.splice(state.tasks.indexOf(open), 1);
+      } else {
+        delete state.notApplicable[key];
+      }
+      saveState();
+    },
+  };
+}
+
+module.exports = { DOCS, UserError, parseLogistica, buildView, buildMenu, createMecanizareStore };

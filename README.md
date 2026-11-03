@@ -1,20 +1,24 @@
 # Panou TV mecanizare
 
-Panou pentru televizor cu două file care se schimbă singure la 2 minute:
+Două intrări, cu două parole:
 
-- **GPS flotă**: hartă cu mașinile evidențiate după stare, top viteze pe săptămâna curentă, mașinile staționate cel mai mult.
-- **Atelier și documente**: ce este în lucru acum, ITP-uri, RCA-uri, tahografe, roviniete și revizii care expiră.
+- **Monitorul**, pentru televizor (`PAROLA_TV`): ce e în curs, ce e de rezolvat, ITP-uri, RCA-uri, roviniete, licențe, tahografe și revizii care expiră. Doar se uită la date.
+- **Meniul**, pentru laptop (`PAROLA_LAPTOP`): filele De rezolvat, În curs, Acte, Istoric și Import Excel. Aici se schimbă datele.
+
+Pe același formular, parola scrisă decide ce se deschide. Literele mari și spațiile de la capete nu contează, pentru că tastatura unui televizor le pune singură.
+
+Fila GPS există în cod, dar e oprită: `gps.activ` în `config.json`.
 
 ## Pornire pe Railway
 
 1. **New Project → Deploy from GitHub repo**, apoi alege acest repository.
-2. La **Variables**, adaugă `CHEIE_ACCES` cu cheia de acces. Fără ea serverul refuză să pornească, ca panoul să nu ajungă pe internet neprotejat.
-3. Adaugă un **Volume** și montează-l la `/data`. Fără el, Excelul încărcat se pierde la fiecare deploy.
+2. La **Variables**, adaugă `PAROLA_TV` și `PAROLA_LAPTOP`, fiecare cu cel puțin 8 caractere și diferite între ele. Fără ele serverul refuză să pornească, ca panoul să nu ajungă pe internet neprotejat.
+3. Adaugă un **Volume** și montează-l la `/data`. Fără el, tot ce e salvat se pierde la fiecare deploy, iar meniul afișează un avertisment.
 4. La **Settings → Networking**, apasă **Generate Domain**.
-5. Deschide `https://DOMENIU/incarca`, scrie cheia și încarcă Excelul.
-6. Pe televizor deschide `https://DOMENIU` și scrie cheia. Browserul o ține minte un an. Poți intra și direct, cu `https://DOMENIU/?cheie=CHEIA`.
+5. Pe laptop deschide `https://DOMENIU`, scrie parola de laptop, apoi importă fișierul Logistica Auto din fila **Import Excel**.
+6. Pe televizor deschide `https://DOMENIU` și scrie parola de televizor. Browserul o ține minte un an, iar pe laptop 30 de zile.
 
-Repository-ul este public. **Nu urca în el Excelul real sau cheia de acces**: `.gitignore` le exclude, iar datele reale stau doar pe volumul din Railway.
+Repository-ul este public. **Nu urca în el fișierul Logistica Auto, parolele sau folderul `date`**: `.gitignore` le exclude.
 
 Browserele din televizoare pot fi vechi. Dacă panoul nu poate porni, pe ecran apare un mesaj cu versiunea browserului. Un mini-PC pe HDMI este varianta sigură.
 
@@ -26,45 +30,53 @@ O singură dată, în folderul proiectului:
 npm install
 ```
 
-Apoi dublu-click pe `Porneste-Panou.bat`. Pornește serverul și deschide Edge pe tot ecranul. Se închide cu Alt+F4. `Porneste-Server.bat` pornește doar serverul, la http://localhost:8080.
+Pune parolele într-un fișier `.env`, care nu ajunge pe GitHub:
 
-Pentru pornire automată la deschiderea calculatorului: `Win+R`, scrie `shell:startup`, pune acolo o scurtătură la fișierul `.bat`.
+```
+PAROLA_TV=parola-televizorului
+PAROLA_LAPTOP=parola-laptopului
+```
 
-Setările locale stau într-un fișier `.env`, care nu ajunge pe GitHub. Vezi „Variabile” mai jos.
+Apoi dublu-click pe `Porneste-Server.bat` și deschide http://localhost:8080. `Porneste-Panou.bat` deschide în plus și Edge pe tot ecranul, iar acesta se închide cu Alt+F4.
 
-## Taste
+## Taste pe monitor
 
 | Tastă | Efect |
 |---|---|
-| Săgeată stânga / dreapta | Schimbă fila |
-| Spațiu | Oprește sau reia rotirea |
 | OK pe telecomandă, Enter sau click | Ecran complet |
 | F | Ecran complet, pornit sau oprit |
+| Spațiu | Oprește sau reia rotirea, când sunt mai multe file |
+| Săgeată stânga / dreapta | Schimbă fila, când sunt mai multe file |
 
 ## Date
 
-Când panoul rulează pe date demonstrative, în bara de sus apare eticheta galbenă **DATE DEMO**.
+### Ce se citește din Logistica Auto
 
-### Fila Atelier și documente: expirări
+Doar foile **VALABILITATE ACTE** și **EVIDENTA AUTO**, și doar numărul, inventarul, tipul, marca, modelul, statusul, șantierul, datele de expirare și linkul de dosar. Foile șoferilor, cu CNP-uri și salarii, nu se citesc, iar fișierul în sine nu se păstrează pe server: rămân doar datele extrase, în `flota.json`.
 
-Încarci centralizatorul lunar la adresa `/incarca`. După fiecare modificare în Excel îl încarci din nou, iar televizorul îl preia în cel mult un minut. Un fișier care nu poate fi citit este refuzat și versiunea bună rămâne pe panou. Fișierul lunii următoare îl înlocuiește pe cel vechi, deci mașinile rămase nerezolvate în fișierul vechi nu mai apar.
+- Mașinile cu status care începe cu `radiat` nu apar nicăieri. Lista e la `mecanizare.statusuriExcluse` în `config.json`.
+- Coloanele `STATUS` ale actelor nu se folosesc, pentru că formula lor scrie `EXPIRAT` și când data lipsește. O dată goală înseamnă că actul nu apare pe monitor. Se vede în fila **Acte**, cu `—`.
+- Dacă un fișier nu poate fi citit, e refuzat și datele bune rămân.
 
-- Fiecare bloc are un titlu (`ITP`, `RCA`, `TAHOGRAF`, `ROVINIETĂ`, opțional `REVIZII`), un rând de antet și mașinile lui.
-- Coloanele folosite sunt `NUMĂR AUTO`, `DATA EXPIRĂRII` și `REALIZAT`. Starea afișată se calculează din dată, nu din coloana `STATUS`.
-- La `REALIZAT`, un rând marcat cu ✅, ☑, ✔, x sau DA dispare de pe panou. 🔲 sau o celulă goală înseamnă că rămâne. Orice alt semn lasă rândul pe panou și apare ca avertisment.
-- Un bloc necunoscut, o dată greșită sau un semn neînțeles apar într-o bandă jos, pe televizor, cu foaia și rândul.
+### Cum merge o lucrare
 
-### Fila Atelier și documente: în lucru și revizii
+| Pas | Ce se întâmplă |
+|---|---|
+| **De rezolvat** | Actele expirate sau care expiră în 30 de zile apar singure. Problemele se adaugă de mână. |
+| **Preia** | Trece la **În curs** și apare pe monitor, cu responsabil și termen. |
+| **Rezolvat** | La acte cere noua dată de valabilitate. Rămâne în **Istoric**. |
+| **Înapoi** | Revine la De rezolvat. |
+| **Nu se aplică** | Actul dispare de pe liste pentru mașina respectivă. Se poate reveni din fila **Acte**. |
 
-Vin dintr-un al doilea Excel, cu foile **Flota** și **In lucru**, încărcat tot la `/incarca`. Modelul este `date/mecanizare.xlsx`, iar instrucțiunile sunt în foaia **Citeste-ma**.
+Între Excel și meniu câștigă mereu data cea mai nouă: un import cu o dată mai veche nu anulează o reînnoire trecută din meniu. Când Excelul ajunge la zi, decide din nou Excelul.
 
-- Cât timp fișierul este marcat demonstrativ, panoul îl ignoră dacă există centralizatorul și afișează „Nu sunt date în Excel”, ca datele inventate să nu apară lângă cele reale.
-- Când îl completezi, scrie `NU` în celula `B3` din foaia **Citeste-ma**. Datele de rovinietă, ITP și RCA din **Flota** sunt ignorate cât timp există centralizatorul.
-- `npm run excel-demo` recreează fișierul demo. Nu suprascrie un fișier existent decât cu `--suprascrie`.
+Reviziile nu sunt în Logistica Auto. Se trec din fila **Acte**, pe coloana Revizie, sau se citesc dintr-o coloană `REVIZIE` dacă apare în Excel.
 
-### Fila GPS: furnizorul
+Totul se salvează în `stare.json`, lângă `flota.json`, pe volumul serverului.
 
-Implicit rulează simulatorul `src/gps/demo.js`. Pentru date reale:
+### GPS
+
+Pentru a-l porni, pune `gps.activ` pe `true`. Implicit rulează simulatorul `src/gps/demo.js`, iar pe ecran apare eticheta **DATE DEMO**. Pentru date reale:
 
 1. Adaugă în `src/gps/` un modul care exportă `fetchPositions()`:
 
@@ -88,8 +100,6 @@ Implicit rulează simulatorul `src/gps/demo.js`. Pentru date reale:
 
 2. Înregistreaz-o în `PROVIDERS` din `src/gps/tracker.js` și pune numele ei la `gps.furnizor` în `config.json`.
 
-### Cum se stabilește starea unei mașini
-
 | Stare | Condiție |
 |---|---|
 | Pornite | contact pus și viteză de cel puțin 5 km/h |
@@ -103,28 +113,25 @@ Vitezele peste 180 km/h sunt tratate ca erori GPS și nu intră în top. Top vit
 
 | Variabilă | Ce face |
 |---|---|
-| `CHEIE_ACCES` | Cheia de acces la panou. Obligatorie pe internet. |
-| `DIR_DATE` | Unde stau fișierele încărcate și topul de viteze. Pe Railway se ia singur din volum; altfel, folderul `date`. |
-| `FISIER_EXPIRARI` | Doar pe calculator: calea către centralizator, ca să fie citit direct la fiecare salvare. Cu un `*` în nume (`Centralizator_expirari_*.xlsx`) se folosește fișierul salvat ultimul. |
-| `PORT` | Îl setează Railway. Când există, serverul ascultă pe toate adresele și cere `CHEIE_ACCES`. |
+| `PAROLA_TV` | Parola monitorului. Obligatorie. |
+| `PAROLA_LAPTOP` | Parola meniului. Obligatorie. |
+| `DIR_DATE` | Unde stau datele. Pe Railway se ia singur din volum; altfel, folderul `date`. |
+| `PORT` | Îl setează Railway. Când există, serverul ascultă pe toate adresele. |
 
-Pe calculator se pun într-un fișier `.env`, câte una pe rând: `CHEIE_ACCES=cheia-ta`.
+Dacă schimbi o parolă, toate dispozitivele intrate cu ea trebuie să o scrie din nou. După 10 parole greșite de la aceeași adresă, formularul se blochează 15 minute.
 
 ## Setări (`config.json`)
 
 | Cheie | Ce face |
 |---|---|
-| `rotatieSecunde` | Cât stă o filă pe ecran |
-| `gps.pragVitezaAtentie`, `gps.pragVitezaCritic` | De la ce viteză se colorează în top |
-| `gps.topViteze` | Câte mașini intră în top |
-| `gps.faraSemnal...`, `gps.vitezaMinimaMiscare`, `gps.vitezaMaximaPlauzibila` | Regulile de mai sus |
+| `mecanizare.statusuriExcluse` | Începutul statusurilor care nu apar pe panou, fără diacritice |
+| `mecanizare.zileUrgent`, `mecanizare.zileAtentie` | Praguri pentru acte |
+| `rotatieSecunde` | Cât stă o filă pe ecran, când sunt mai multe |
+| `gps.activ` | Pornește sau oprește fila GPS |
+| `gps.pragVitezaAtentie`, `gps.pragVitezaCritic`, `gps.topViteze` | Top viteze |
 | `harta.tile` | Serverul de hartă (implicit OpenStreetMap, necesită internet) |
-| `mecanizare.zileUrgent`, `mecanizare.zileAtentie` | Praguri pentru documente și revizii după dată |
-| `mecanizare.kmUrgent`, `kmAtentie`, `oreUrgent`, `oreAtentie` | Praguri pentru revizii după contor |
 
 Modificările din `config.json` se aplică după repornirea serverului.
-
-Pentru probe: `http://localhost:8080/?rotatie=10&fila=mecanizare`.
 
 ## Teste
 

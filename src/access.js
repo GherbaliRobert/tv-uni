@@ -1,10 +1,21 @@
 const crypto = require('crypto');
 
 const COOKIE = 'panou_acces';
-const ONE_YEAR_MS = 365 * 24 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
+const LIFETIME_MS = { tv: 365 * DAY_MS, admin: 30 * DAY_MS };
+const LANDING = { tv: '/', admin: '/meniu/' };
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_FAILURES = 10;
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const MAX_TRACKED_ADDRESSES = 1000;
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest();
-const matches = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
+const same = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
+
+// A TV keyboard capitalizes on its own and is hard to correct, so case and stray spaces don't count.
+const clean = (password) => String(password ?? '').trim().toLowerCase();
+
+const tokenFor = (role, password) => crypto.createHmac('sha256', password).update(`panou:${role}`).digest('hex');
 
 function readCookie(header, name) {
   for (const part of String(header ?? '').split(';')) {
@@ -14,8 +25,21 @@ function readCookie(header, name) {
   return null;
 }
 
+// The reason the server must refuse to start, or null. The panel is never served unprotected.
+function passwordProblem(tvPassword, adminPassword) {
+  const tv = clean(tvPassword);
+  const admin = clean(adminPassword);
+  if (!tv) return 'Lipsește variabila PAROLA_TV.';
+  if (!admin) return 'Lipsește variabila PAROLA_LAPTOP.';
+  if (tv.length < MIN_PASSWORD_LENGTH || admin.length < MIN_PASSWORD_LENGTH) {
+    return `Parolele trebuie să aibă cel puțin ${MIN_PASSWORD_LENGTH} caractere.`;
+  }
+  if (tv === admin) return 'PAROLA_TV și PAROLA_LAPTOP trebuie să fie diferite.';
+  return null;
+}
+
 // Big and script-free, so it works with a TV remote and an old browser.
-function keyPage(wrong) {
+function passwordPage(message) {
   return `<!doctype html>
 <html lang="ro">
 <head>
@@ -24,64 +48,105 @@ function keyPage(wrong) {
 <meta name="robots" content="noindex">
 <title>Panou</title>
 <style>
-  html { background: #0d0d0d; color: #f0efec; font: 3vw "Segoe UI", system-ui, sans-serif; text-align: center; }
-  body { padding-top: 12vh; }
+  html { background: #0d0d0d; color: #f0efec; font: 22px "Segoe UI", system-ui, sans-serif; text-align: center; }
+  body { padding: 12vh 1rem 0; }
   input, button { font: inherit; padding: .4em .6em; border-radius: .2em; border: 2px solid #989690; }
-  input { width: 12em; background: #1a1a19; color: inherit; }
+  input { width: 12em; max-width: 100%; background: #1a1a19; color: inherit; }
   button { background: #3987e5; color: #fff; border-color: #3987e5; font-weight: 700; }
   p { color: #c3c2b7; }
 </style>
 </head>
 <body>
-<h1>Cheie de acces</h1>
-${wrong ? '<p>Cheia nu este corectă.</p>' : ''}
-<form method="get" action="/">
-  <input name="cheie" autofocus autocomplete="off" autocapitalize="off" spellcheck="false">
+<h1>Parolă</h1>
+${message ? `<p>${message}</p>` : ''}
+<form method="post" action="/intra">
+  <input type="password" name="parola" autofocus autocomplete="current-password">
   <button>Intră</button>
 </form>
 </body>
 </html>`;
 }
 
-// Every request needs the key, this machine's included: a public tunnel also arrives from
-// localhost, so the source address proves nothing. The cookie holds a hash, not the key.
-function createAccessGate(rawKey) {
-  const key = rawKey.trim().toLowerCase();
-  const token = digest(key).toString('hex');
+function createAccess({ tvPassword, adminPassword }) {
+  const tokens = { admin: tokenFor('admin', clean(adminPassword)), tv: tokenFor('tv', clean(tvPassword)) };
+  const failures = new Map();
 
-  return (req, res, next) => {
-    const given = req.query.cheie;
-    const hasValidKey = typeof given === 'string' && matches(given.trim().toLowerCase(), key);
+  function roleOf(req) {
+    const cookie = readCookie(req.headers.cookie, COOKIE);
+    if (!cookie) return null;
+    if (same(cookie, tokens.admin)) return 'admin';
+    if (same(cookie, tokens.tv)) return 'tv';
+    return null;
+  }
 
-    if (hasValidKey) {
-      const others = new URLSearchParams(req.query);
-      others.delete('cheie');
-      const query = others.toString();
+  function isBlocked(address) {
+    const entry = failures.get(address);
+    if (!entry) return false;
+    if (Date.now() - entry.since > FAILURE_WINDOW_MS) {
+      failures.delete(address);
+      return false;
+    }
+    return entry.count >= MAX_FAILURES;
+  }
+
+  function recordFailure(address) {
+    if (failures.size >= MAX_TRACKED_ADDRESSES) failures.clear();
+    const entry = failures.get(address) ?? { count: 0, since: Date.now() };
+    entry.count += 1;
+    failures.set(address, entry);
+  }
+
+  function refuse(req, res, status, message) {
+    res.set('Cache-Control', 'no-store');
+    if (req.path.startsWith('/api/') || req.baseUrl.startsWith('/api/')) {
+      res.status(status).json({ error: message });
+      return;
+    }
+    res.status(status).type('html').send(passwordPage(message));
+  }
+
+  return {
+    login(req, res) {
       res.set('Cache-Control', 'no-store');
-      res.cookie(COOKIE, token, {
+      if (isBlocked(req.ip)) {
+        res.status(429).type('html').send(passwordPage('Prea multe încercări. Mai încearcă peste 15 minute.'));
+        return;
+      }
+      const given = clean(req.body?.parola);
+      const role = [['admin', adminPassword], ['tv', tvPassword]]
+        .find(([, password]) => same(given, clean(password)))?.[0];
+      if (!role) {
+        recordFailure(req.ip);
+        res.status(401).type('html').send(passwordPage('Parola nu este corectă.'));
+        return;
+      }
+      failures.delete(req.ip);
+      res.cookie(COOKIE, tokens[role], {
         httpOnly: true,
         sameSite: 'lax',
         secure: req.get('x-forwarded-proto') === 'https',
-        maxAge: ONE_YEAR_MS,
+        maxAge: LIFETIME_MS[role],
       });
-      // Always to the root: echoing the requested path back would make this an open redirect.
-      res.redirect(`/${query ? `?${query}` : ''}`);
-      return;
-    }
+      res.redirect(303, LANDING[role]);
+    },
 
-    const cookie = readCookie(req.headers.cookie, COOKIE);
-    if (cookie && matches(cookie, token)) {
-      next();
-      return;
-    }
+    logout(req, res) {
+      res.clearCookie(COOKIE);
+      res.redirect(303, '/');
+    },
 
-    res.set('Cache-Control', 'no-store');
-    if (req.path.startsWith('/api/')) {
-      res.status(401).json({ error: 'Lipsește cheia de acces' });
-      return;
-    }
-    res.status(401).type('html').send(keyPage(typeof given === 'string'));
+    // Every request needs a password, this machine's included.
+    gate(req, res, next) {
+      req.role = roleOf(req);
+      if (req.role) next();
+      else refuse(req, res, 401, 'Lipsește parola');
+    },
+
+    requireAdmin(req, res, next) {
+      if (req.role === 'admin') next();
+      else refuse(req, res, 403, 'Meniul se deschide cu parola de laptop.');
+    },
   };
 }
 
-module.exports = { createAccessGate };
+module.exports = { createAccess, passwordProblem };

@@ -3,7 +3,6 @@ node_modules/
 .claude/
 .profil-edge/
 
-# The repository is public: real plates and dates must never end up in it.
-date/*
-!date/mecanizare.xlsx
-*.xlsx.tmp
+# The repository is public: real plates, dates and uploaded Excel files must never end up in it.
+date/
+*.xlsx

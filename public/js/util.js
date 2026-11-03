@@ -36,6 +36,17 @@ const hourMinute = new Intl.DateTimeFormat('ro-RO', { hour: '2-digit', minute: '
 const shortDay = new Intl.DateTimeFormat('ro-RO', { weekday: 'short', timeZone: TZ });
 const shortDate = new Intl.DateTimeFormat('ro-RO', { day: 'numeric', month: 'short', timeZone: TZ });
 
+// Old expiries read better in months or years: "expirat 3 ani", not "expirat 1092 de zile".
+export function expiryText(days) {
+  if (days === 0) return 'expiră azi';
+  if (days === 1) return 'expiră mâine';
+  if (days > 0) return `în ${count(days, 'zi', 'zile')}`;
+  const overdue = -days;
+  if (overdue < 60) return `expirat ${count(overdue, 'zi', 'zile')}`;
+  if (overdue < 730) return `expirat ${count(Math.floor(overdue / 30.4), 'lună', 'luni')}`;
+  return `expirat ${count(Math.floor(overdue / 365), 'an', 'ani')}`;
+}
+
 export const fmtDate = (ms) => dayMonth.format(ms);
 export const fmtTime = (ms) => hourMinute.format(ms);
 export const fmtShortDate = (ms) => shortDate.format(ms).replace('.', '');

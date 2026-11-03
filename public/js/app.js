@@ -1,6 +1,6 @@
 import { initGps, renderGps } from './gps.js';
 import { initMecanizare, renderMecanizare, startPaging, stopPaging } from './mecanizare.js';
-import { TZ, esc, icon, now, syncClock, fmtDuration, fmtTime } from './util.js';
+import { TZ, esc, icon, now, syncClock, fmtDuration, fmtShortDate, fmtTime } from './util.js';
 
 const MECANIZARE_REFRESH_MS = 30000;
 const STALE_GPS_INTERVALS = 4;
@@ -8,8 +8,8 @@ const STALE_GPS_INTERVALS = 4;
 window.panouPornit = true;
 
 const params = new URLSearchParams(location.search);
-const tabs = [...document.querySelectorAll('.tab')];
-const buttons = [...document.querySelectorAll('.tab-btn')];
+let tabs = [...document.querySelectorAll('.tab')];
+let buttons = [...document.querySelectorAll('.tab-btn')];
 
 const state = {
   active: 0,
@@ -26,7 +26,7 @@ let rotationTimer;
 
 function scheduleRotation() {
   clearTimeout(rotationTimer);
-  if (!state.paused && state.rotationMs > 0) {
+  if (!state.paused && state.rotationMs > 0 && tabs.length > 1) {
     rotationTimer = setTimeout(() => showTab(state.active + 1), state.rotationMs);
   }
 }
@@ -116,12 +116,11 @@ function renderStatus() {
       chips.push(`<span class="chip">GPS actualizat ${esc(fmtTime(gps.updatedAt))}</span>`);
     }
   }
-  if (mecanizare && mecanizare.error && mecanizare.view) {
-    chips.push(`<span class="chip chip--bad">${icon('alert')}Excel necitibil — ultima versiune bună</span>`);
+  if (mecanizare && mecanizare.updatedAt) {
+    chips.push(`<span class="chip">Date din ${esc(fmtShortDate(mecanizare.updatedAt))}</span>`);
   }
 
-  const demo = [gps && gps.demo && 'GPS', mecanizare && mecanizare.demo && 'Excel'].filter(Boolean);
-  if (demo.length) chips.push(`<span class="chip chip--demo">DATE DEMO (${demo.join(' + ')})</span>`);
+  if (gps && gps.demo) chips.push('<span class="chip chip--demo">DATE DEMO (GPS)</span>');
   if (state.paused) chips.push(`<span class="chip chip--pause">${icon('pause')}Rotire oprită</span>`);
 
   document.getElementById('status').innerHTML = chips.join('');
@@ -152,19 +151,30 @@ async function main() {
   state.gpsIntervalMs = config.actualizareGpsSecunde * 1000;
   document.documentElement.style.setProperty('--rotation', `${rotationSeconds}s`);
 
-  initGps(config);
   initMecanizare(config);
+  if (config.gps) {
+    initGps(config);
+  } else {
+    // Off for now: a single tab, so there is nothing to rotate or to choose from.
+    document.getElementById('tab-gps').remove();
+    document.querySelector('.tabs').remove();
+    tabs = [...document.querySelectorAll('.tab')];
+    buttons = [];
+  }
 
   renderClock();
   setInterval(renderClock, 1000);
   setInterval(renderStatus, 5000);
   setInterval(nightlyReload, 60000);
 
-  showTab(params.get('fila') === 'mecanizare' ? 1 : 0);
+  showTab(params.get('fila') === 'mecanizare' ? tabs.length - 1 : 0);
 
-  await Promise.all([refreshGps(), refreshMecanizare()]);
-  setInterval(refreshGps, state.gpsIntervalMs);
+  await refreshMecanizare();
   setInterval(refreshMecanizare, MECANIZARE_REFRESH_MS);
+  if (config.gps) {
+    await refreshGps();
+    setInterval(refreshGps, state.gpsIntervalMs);
+  }
 }
 
 main().catch((err) => {

@@ -1,4 +1,4 @@
-import { esc, icon, plate, count, fmtDate, fmtDuration, fmtShortDate, fmtNumber, now, remPx } from './util.js';
+import { esc, icon, plate, count, expiryText, fmtDate, fmtDuration, fmtShortDate, now, remPx } from './util.js';
 
 const LEVELS = {
   expired: { icon: 'x' },
@@ -6,22 +6,23 @@ const LEVELS = {
   soon: { icon: 'clock' },
 };
 
-const LIST_NAMES = { itp: 'ITP', rca: 'RCA', tahograf: 'Tahograf', rovinieta: 'Rov.', revizii: 'Revizii' };
+const LIST_NAMES = { itp: 'ITP', rca: 'RCA', rovinieta: 'Rov.', alte: 'Altele' };
 
 const WORK_ROW_REM = 6.1;
 const DOC_ROW_REM = 3.05;
 const PAGE_FLIP_MS = 20000;
 
 const panels = {
-  work: { rowRem: WORK_ROW_REM, items: [], page: 0, render: workRow },
-  rovinieta: { rowRem: DOC_ROW_REM, items: [], page: 0, render: docRow },
+  work: { rowRem: WORK_ROW_REM, items: [], page: 0, render: workRow, empty: 'Nimic în curs' },
+  problems: { rowRem: WORK_ROW_REM, items: [], page: 0, render: workRow, empty: 'Nicio problemă deschisă' },
   itp: { rowRem: DOC_ROW_REM, items: [], page: 0, render: docRow },
   rca: { rowRem: DOC_ROW_REM, items: [], page: 0, render: docRow },
-  tahograf: { rowRem: DOC_ROW_REM, items: [], page: 0, render: docRow },
-  revizii: { rowRem: DOC_ROW_REM, items: [], page: 0, render: revizieRow },
+  rovinieta: { rowRem: DOC_ROW_REM, items: [], page: 0, render: docRow },
+  alte: { rowRem: DOC_ROW_REM, items: [], page: 0, render: otherDocRow },
 };
 
 let cfg;
+let loaded = false;
 let pageTimer;
 
 export function initMecanizare(appConfig) {
@@ -32,75 +33,50 @@ function badge(level, text) {
   return `<span class="badge badge--${level}">${icon(LEVELS[level].icon)}${esc(text)}</span>`;
 }
 
-function daysText(days) {
-  if (days < 0) return `expirat ${count(-days, 'zi', 'zile')}`;
-  if (days === 0) return 'expiră azi';
-  if (days === 1) return 'expiră mâine';
-  return `în ${count(days, 'zi', 'zile')}`;
+function docRowWith(item, note) {
+  const tag = item.inProgress ? '<span class="tag">în curs</span>' : `<span class="type">${esc(note)}</span>`;
+  return `<div class="doc-row">
+    ${plate(item.plate)}
+    ${tag}
+    <span class="when">${esc(fmtDate(item.date))}</span>
+    ${badge(item.level, expiryText(item.days))}
+  </div>`;
 }
 
 function docRow(item) {
-  return `<div class="doc-row">
-    ${plate(item.plate)}
-    <span class="type">${esc(item.type)}</span>
-    <span class="when">${esc(fmtDate(item.date))}</span>
-    ${badge(item.level, daysText(item.days))}
-  </div>`;
+  return docRowWith(item, item.working ? item.label : item.status);
 }
 
-function revizieRow(item) {
-  if (item.date !== null) return docRow(item);
-  const left = item.counterLeft;
-  const text = left <= 0
-    ? `depășit ${fmtNumber(-left)} ${item.unit}`
-    : `mai sunt ${fmtNumber(left)} ${item.unit}`;
-  return `<div class="doc-row">
-    ${plate(item.plate)}
-    <span class="type">${esc(item.type)}</span>
-    <span class="when">${esc(fmtNumber(item.counterDue))} ${esc(item.unit)}</span>
-    ${badge(item.level, text)}
-  </div>`;
+function otherDocRow(item) {
+  return docRowWith(item, item.working ? item.docName : `${item.docName}, ${item.status}`);
 }
 
-function statusTag(status) {
-  if (!status) return '';
-  const key = status.toLowerCase();
-  if (key.includes('piese')) return `<span class="tag tag--wait">${icon('pause')}${esc(status)}</span>`;
-  if (key.includes('finaliz')) return `<span class="tag tag--done">${icon('check')}${esc(status)}</span>`;
-  return `<span class="tag">${esc(status)}</span>`;
-}
-
-function dueText(work) {
-  if (work.dueDays === null) return '<span class="work-due">fără termen</span>';
-  if (work.dueDays < 0) {
-    return `<span class="work-due work-due--late">${icon('alert')} termen depășit cu ${esc(count(-work.dueDays, 'zi', 'zile'))}</span>`;
+function dueText(task) {
+  if (task.dueDays === null) return '<span class="work-due">fără termen</span>';
+  if (task.dueDays < 0) {
+    return `<span class="work-due work-due--late">${icon('alert')} termen depășit cu ${esc(count(-task.dueDays, 'zi', 'zile'))}</span>`;
   }
-  if (work.dueDays === 0) return '<span class="work-due">termen: azi</span>';
-  if (work.dueDays === 1) return '<span class="work-due">termen: mâine</span>';
-  return `<span class="work-due">termen: ${esc(fmtShortDate(work.due))}</span>`;
+  if (task.dueDays === 0) return '<span class="work-due">termen: azi</span>';
+  if (task.dueDays === 1) return '<span class="work-due">termen: mâine</span>';
+  return `<span class="work-due">termen: ${esc(fmtShortDate(task.due))}</span>`;
 }
 
-function workRow(work) {
-  const vehicle = [work.type, work.model].filter(Boolean).join(' · ');
-  const meta = [
-    work.mechanic,
-    work.location,
-    work.since ? `intrat de ${fmtDuration(now() - work.since)}` : null,
-  ].filter(Boolean).join(' · ');
+function workRow(task) {
+  const since = task.startedAt || task.createdAt;
+  const meta = [task.responsible, task.location, `de ${fmtDuration(now() - since)}`].filter(Boolean).join(' · ');
   return `<div class="work-row">
-    <div class="work-who">${plate(work.plate)}<span class="type">${esc(vehicle)}</span></div>
-    <div class="work-tags">${work.urgent ? '<span class="tag tag--urgent">Urgent</span>' : ''}${statusTag(work.status)}</div>
-    <div class="work-job">${esc(work.job)}</div>
+    <div class="work-who">${task.plate ? plate(task.plate) : ''}<span class="type">${esc(task.label)}</span></div>
+    <div class="work-tags">${task.urgent ? '<span class="tag tag--urgent">Urgent</span>' : ''}</div>
+    <div class="work-job">${esc(task.title)}</div>
     <div class="work-meta">${esc(meta)}</div>
-    ${dueText(work)}
+    ${dueText(task)}
   </div>`;
 }
 
-function emptyLine(key, known) {
-  if (known === undefined) return ''; // Nothing loaded yet, so nothing to claim.
-  if (!known) return `<div class="empty-line empty-line--nodata">${icon('file')}Nu sunt date în Excel</div>`;
-  const text = key === 'work' ? 'Nicio mașină în lucru' : `Nimic scadent în următoarele ${cfg.zileAtentie} de zile`;
-  return `<div class="empty-line">${icon('check')}${text}</div>`;
+function emptyLine(panel) {
+  if (!loaded) return ''; // Nothing loaded yet, so nothing to claim.
+  const text = panel.empty || `Nimic scadent în următoarele ${cfg.zileAtentie} de zile`;
+  return `<div class="empty-line">${icon('check')}${esc(text)}</div>`;
 }
 
 function renderPanel(key) {
@@ -108,7 +84,7 @@ function renderPanel(key) {
   const body = document.getElementById(`body-${key}`);
   const pager = document.getElementById(`pager-${key}`);
   if (!panel.items.length) {
-    body.innerHTML = emptyLine(key, panel.known);
+    body.innerHTML = emptyLine(panel);
     pager.textContent = '';
     return;
   }
@@ -132,8 +108,8 @@ function nextPages() {
   }
 }
 
-// Each visit starts at the most urgent page, unless the list is too long to get
-// through in one visit: then it carries on, so the last pages are still shown.
+// With the GPS tab back, each visit starts at the most urgent page, unless the list is too
+// long to get through in one visit: then it carries on, so the last pages are still shown.
 export function startPaging(visibleMs) {
   for (const panel of Object.values(panels)) {
     if ((panel.pages || 1) * PAGE_FLIP_MS <= visibleMs) panel.page = 0;
@@ -163,21 +139,13 @@ function kpi(tone, value, label, sub, ic = '') {
 }
 
 function renderKpis(view) {
-  const { totals, fleetTotal, available, overdueWork, work, known, pendingPlates, pendingCount, doneCount } = view;
-  const waiting = work.filter((w) => (w.status || '').toLowerCase().includes('piese')).length;
-  const availability = fleetTotal ? Math.round((available / fleetTotal) * 100) : 0;
-  const workSub = [
-    overdueWork ? `${overdueWork} cu termen depășit` : 'toate în termen',
-    waiting ? `${waiting} așteaptă piese` : null,
-  ].filter(Boolean).join(' · ');
+  const { totals, overdueWork, work, problems, pendingDocuments } = view;
+  const workSub = work.length ? (overdueWork ? `${overdueWork} cu termen depășit` : 'toate în termen') : 'nimic preluat';
+  const pending = pendingDocuments + problems.length;
 
   document.getElementById('kpis').innerHTML = [
-    known.work
-      ? kpi('accent', work.length, 'În lucru acum', workSub, 'wrench')
-      : kpi('neutral', '—', 'În lucru acum', 'nu sunt date în Excel'),
-    fleetTotal
-      ? kpi('neutral', `${available}<small>/${fleetTotal}</small>`, 'Disponibile', `${availability}% din flotă`)
-      : kpi('neutral', pendingPlates, 'Mașini vizate', `${count(pendingCount, 'document', 'documente')} · ${count(doneCount, 'realizat', 'realizate')}`),
+    kpi('accent', work.length, 'În curs', workSub, 'wrench'),
+    kpi('neutral', pending, 'De rezolvat', `${count(pendingDocuments, 'act', 'acte')} · ${count(problems.length, 'problemă', 'probleme')}`),
     kpi(totals.expired ? 'crit' : 'good', totals.expired, 'Expirate', breakdown(view, 'expired'), totals.expired ? 'x' : 'check'),
     kpi(totals.urgent ? 'serious' : 'good', totals.urgent, `Expiră în ${cfg.zileUrgent} zile`, breakdown(view, 'urgent'), totals.urgent ? 'alert' : 'check'),
     kpi(totals.soon ? 'warn' : 'good', totals.soon, `Expiră în ${cfg.zileUrgent + 1}–${cfg.zileAtentie} zile`, breakdown(view, 'soon'), totals.soon ? 'clock' : 'check'),
@@ -193,29 +161,23 @@ function renderCounts(key, counts) {
 
 export function renderMecanizare(data) {
   const emptyEl = document.getElementById('mec-empty');
-  const warningsEl = document.getElementById('mec-warnings');
 
   if (!data.view) {
     emptyEl.hidden = false;
-    emptyEl.innerHTML = `${icon('file')}<h2>Datele de mecanizare nu sunt disponibile</h2><p>${esc(data.error || 'Se încarcă...')}</p><p>Încarcă Excelul de pe calculator, la adresa /incarca.</p>`;
+    emptyEl.innerHTML = `${icon('file')}<h2>Nu sunt încă date</h2><p>Încarcă fișierul Logistica Auto din meniul de pe laptop.</p>`;
     return;
   }
   emptyEl.hidden = true;
+  loaded = true;
 
   const { view } = data;
   renderKpis(view);
   panels.work.items = view.work;
-  panels.work.known = view.known.work;
+  panels.problems.items = view.problems;
   for (const key of Object.keys(LIST_NAMES)) {
     panels[key].items = view.lists[key];
-    panels[key].known = view.known[key];
     renderCounts(key, view.counts[key]);
   }
-
-  warningsEl.hidden = !data.warnings.length;
-  warningsEl.innerHTML = data.warnings.length
-    ? `${icon('alert')}<span>Excel: ${esc(count(data.warnings.length, 'problemă', 'probleme'))} — ${esc(data.warnings.slice(0, 2).join('; '))}</span>`
-    : '';
 
   renderAll();
 }
